@@ -1,13 +1,15 @@
 import html
 import io
+import importlib
 import queue
 import threading
 import wave
 
-import av
-import numpy as np
 import streamlit as st
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
+
+av = importlib.import_module("av")
+np = importlib.import_module("numpy")
 
 from core import (
     KnowledgeBase,

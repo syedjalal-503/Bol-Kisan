@@ -7,6 +7,7 @@ import tempfile
 import subprocess
 
 from pathlib import Path
+from faster_whisper import WhisperModel
 from io import BytesIO
 from functools import lru_cache
 
