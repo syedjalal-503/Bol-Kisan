@@ -1,39 +1,56 @@
 import os
 import re
 import sys
+import time
 import sqlite3
 import tempfile
 import subprocess
+
 from pathlib import Path
 from io import BytesIO
 from functools import lru_cache
 
 import fitz
-import pandas as pdsss
+import pandas as pd
+
 from dotenv import load_dotenv
 from groq import Groq
 from faster_whisper import WhisperModel
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-# --------------------------------------------------
+# ==================================================
 # 1. CONFIGURATION
-# --------------------------------------------------
+# ==================================================
 
 BASE_DIR = Path(__file__).resolve().parent
+
 load_dotenv(BASE_DIR / ".env")
 
 KB_DIR = BASE_DIR / "knowledge_base"
 CACHE_DIR = BASE_DIR / "cache"
+
 DB_PATH = CACHE_DIR / "answers.db"
+
 MANDI_FILE = BASE_DIR / "data" / "mandi_prices.csv"
-PIPER_MODEL = BASE_DIR / "models" / "piper" / "hi_IN-pratham-medium.onnx"
+
+PIPER_MODEL = (
+    BASE_DIR
+    / "models"
+    / "piper"
+    / "hi_IN-pratham-medium.onnx"
+)
 
 CACHE_DIR.mkdir(exist_ok=True)
 
 API_KEY = os.getenv("GROQ_API_KEY")
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+MODEL = os.getenv(
+    "GROQ_MODEL",
+    "llama-3.3-70b-versatile"
+)
 
 client = None
 
@@ -41,18 +58,21 @@ if API_KEY:
     try:
         client = Groq(
             api_key=API_KEY,
-            timeout=15.0,
+            timeout=8.0,
             max_retries=0
         )
     except Exception as error:
         print("Groq setup error:", error)
 
-print("Bol Kisan: Groq configured =", client is not None)
+print(
+    "Bol Kisan: Groq configured =",
+    client is not None
+)
 
 
-# --------------------------------------------------
+# ==================================================
 # 2. READ FARMING DOCUMENTS
-# --------------------------------------------------
+# ==================================================
 
 def load_documents():
 
@@ -68,7 +88,10 @@ def load_documents():
             try:
                 with fitz.open(path) as pdf:
 
-                    for page_number, page in enumerate(pdf, start=1):
+                    for page_number, page in enumerate(
+                        pdf,
+                        start=1
+                    ):
 
                         text = page.get_text().strip()
 
@@ -102,9 +125,9 @@ def load_documents():
     return documents
 
 
-# --------------------------------------------------
+# ==================================================
 # 3. CREATE SEARCHABLE CHUNKS
-# --------------------------------------------------
+# ==================================================
 
 def create_chunks(documents, size=1200):
 
@@ -114,7 +137,6 @@ def create_chunks(documents, size=1200):
 
         text = document["text"]
 
-        # Keep Hindi question-and-answer pairs together.
         if re.search(r"प्रश्न\s*[:：]", text):
 
             parts = re.split(
@@ -147,15 +169,16 @@ def create_chunks(documents, size=1200):
     return chunks
 
 
-# --------------------------------------------------
+# ==================================================
 # 4. SEARCH FARMING KNOWLEDGE
-# --------------------------------------------------
+# ==================================================
 
 class KnowledgeBase:
 
     def __init__(self):
 
         documents = load_documents()
+
         self.chunks = create_chunks(documents)
 
         self.vectorizer = None
@@ -166,44 +189,65 @@ class KnowledgeBase:
             self.vectorizer = TfidfVectorizer(
                 analyzer="char",
                 ngram_range=(2, 5),
-                max_features=30000
+                max_features=20000,
+                dtype="float64"
             )
 
             self.matrix = self.vectorizer.fit_transform(
-                [chunk["text"] for chunk in self.chunks]
+                [
+                    chunk["text"]
+                    for chunk in self.chunks
+                ]
             )
+
+        print(
+            "Knowledge base loaded:",
+            len(self.chunks),
+            "chunks"
+        )
 
     def search(self, question, top_k=3):
 
         if self.matrix is None:
             return []
 
-        query = self.vectorizer.transform([question])
+        try:
 
-        scores = cosine_similarity(
-            query,
-            self.matrix
-        )[0]
+            query = self.vectorizer.transform(
+                [question]
+            )
 
-        indices = scores.argsort()[::-1][:top_k]
+            scores = cosine_similarity(
+                query,
+                self.matrix
+            )[0]
 
-        results = []
+            indices = scores.argsort()[::-1][:top_k]
 
-        for index in indices:
+            results = []
 
-            if scores[index] >= 0.04:
+            for index in indices:
 
-                result = self.chunks[index].copy()
-                result["score"] = float(scores[index])
+                if scores[index] >= 0.04:
 
-                results.append(result)
+                    result = self.chunks[index].copy()
 
-        return results
+                    result["score"] = float(
+                        scores[index]
+                    )
+
+                    results.append(result)
+
+            return results
+
+        except Exception as error:
+            print("Knowledge search error:", error)
+            return []
 
 
-# --------------------------------------------------
+# ==================================================
 # 5. CHEMICAL SAFETY
-# --------------------------------------------------
+# ==================================================
 
 CHEMICAL_REQUEST_TERMS = [
 
@@ -249,9 +293,9 @@ def safety_response(language):
 
         return (
             "किसान भाई, बिना फसल और कीट की सही पहचान के "
-            "किसी दवा का नाम या मात्रा बताना सुरक्षित नहीं है। "
-            "पहले कीट की पहचान करें और दवा के असली लेबल "
-            "की जानकारी जांचें।"
+            "दवा का नाम या मात्रा बताना सुरक्षित नहीं है। "
+            "दवा के असली लेबल की जानकारी जांचें और "
+            "कृषि विशेषज्ञ से सलाह लें।"
         )
 
     if language == "Telugu":
@@ -259,19 +303,19 @@ def safety_response(language):
         return (
             "పంట మరియు పురుగును సరిగ్గా గుర్తించకుండా "
             "మందు పేరు లేదా మోతాదు చెప్పడం సురక్షితం కాదు. "
-            "మందు అసలు లేబుల్‌ను పరిశీలించండి."
+            "మందు లేబుల్‌ను పరిశీలించి వ్యవసాయ నిపుణుడిని సంప్రదించండి."
         )
 
     return (
         "It is not safe to recommend a chemical or dose "
         "without identifying the crop and pest. Check the "
-        "exact product label before applying any chemical."
+        "product label and consult an agricultural expert."
     )
 
 
-# --------------------------------------------------
-# 6. OFFLINE ANSWER CACHE
-# --------------------------------------------------
+# ==================================================
+# 6. ANSWER CACHE
+# ==================================================
 
 def init_cache():
 
@@ -304,7 +348,11 @@ def get_cached_answer(question, language):
     with sqlite3.connect(DB_PATH) as connection:
 
         row = connection.execute(
-            "SELECT answer FROM answers WHERE question = ?",
+            """
+            SELECT answer
+            FROM answers
+            WHERE question = ?
+            """,
             (key,)
         ).fetchone()
 
@@ -325,13 +373,81 @@ def save_answer(question, answer, language):
             (question, answer, language)
             VALUES (?, ?, ?)
             """,
-            (key, answer, language)
+            (
+                key,
+                answer,
+                language
+            )
         )
 
 
-# --------------------------------------------------
-# 7. SHORT LOCAL ANSWER
-# --------------------------------------------------
+# ==================================================
+# 7. CONVERSATION CONTEXT
+# ==================================================
+
+def build_retrieval_query(
+    question,
+    conversation_context=""
+):
+
+    question = question.strip()
+
+    if not conversation_context:
+        return question
+
+    previous_questions = re.findall(
+        r"Farmer:\s*(.+)",
+        conversation_context
+    )
+
+    if not previous_questions:
+        return question
+
+    previous_question = (
+        previous_questions[-1].strip()
+    )
+
+    follow_up_terms = [
+
+        "it", "this", "that", "they", "them",
+        "same", "why", "how", "what about",
+
+        "और", "यह", "ये", "इसका", "इसकी",
+        "उसका", "उसकी", "फिर", "क्या यह",
+        "क्या ये", "ऐसा", "ऐसी",
+
+        "iska", "iski", "uska", "uski",
+        "yeh", "ye", "woh", "phir", "aur"
+
+    ]
+
+    question_lower = question.lower()
+
+    is_follow_up = (
+
+        len(question) <= 90
+
+        or any(
+            term in question_lower
+            for term in follow_up_terms
+        )
+
+    )
+
+    if is_follow_up:
+
+        return (
+            previous_question
+            + " "
+            + question
+        )
+
+    return question
+
+
+# ==================================================
+# 8. EXTRACT LOCAL ANSWER
+# ==================================================
 
 def extract_local_answer(source_text):
 
@@ -355,9 +471,25 @@ def extract_local_answer(source_text):
     return source_text[:500].strip()
 
 
-def offline_answer(question, language, knowledge_base):
+# ==================================================
+# 9. OFFLINE ANSWER
+# ==================================================
 
-    sources = knowledge_base.search(question)
+def offline_answer(
+    question,
+    language,
+    knowledge_base,
+    conversation_context=""
+):
+
+    search_query = build_retrieval_query(
+        question,
+        conversation_context
+    )
+
+    sources = knowledge_base.search(
+        search_query
+    )
 
     if not sources:
 
@@ -372,8 +504,8 @@ def offline_answer(question, language, knowledge_base):
         if language == "Hindi":
 
             return (
-                "माफ कीजिए किसान भाई, मेरी स्थानीय जानकारी में "
-                "इस सवाल का सही जवाब नहीं मिला।"
+                "माफ कीजिए किसान भाई, मेरी स्थानीय जानकारी "
+                "में इस सवाल का सही जवाब नहीं मिला।"
             ), []
 
         return (
@@ -388,68 +520,128 @@ def offline_answer(question, language, knowledge_base):
     return answer, sources
 
 
-# --------------------------------------------------
-# 8. HYBRID ANSWER: GROQ ONLINE + LOCAL OFFLINE
-# --------------------------------------------------
+# ==================================================
+# 10. HYBRID ANSWER GENERATION
+# ==================================================
 
-def generate_answer(question, language, knowledge_base):
+def generate_answer(
+    question,
+    language,
+    knowledge_base,
+    conversation_context=""
+):
+
+    start_time = time.perf_counter()
 
     question = question.strip()
 
     if not question:
-        return "Please enter or speak a question.", []
+        return "कृपया अपना सवाल बताइए।", []
 
-    # Chemical safety check.
+    # CHEMICAL SAFETY
+
     if is_sensitive(question):
         return safety_response(language), []
 
-    sources = knowledge_base.search(question)
+    # ANSWER CACHE
 
-    cached = get_cached_answer(
-        question,
-        language
-    )
+    cached = None
 
-    # If no relevant documents are found.
-    if not sources:
+    if not conversation_context:
+
+        cached = get_cached_answer(
+            question,
+            language
+        )
 
         if cached:
+
+            print(
+                "Answer cache hit:",
+                round(time.perf_counter() - start_time, 2),
+                "seconds"
+            )
+
             return cached, []
 
-        if language == "Hindi":
+    # SEARCH LOCAL KNOWLEDGE
 
-            return (
-                "किसान भाई, मेरी दी गई खेती की जानकारी में "
-                "इस सवाल का सही जवाब नहीं मिला।"
-            ), []
-
-        return (
-            "I could not find reliable information in the "
-            "provided farming documents."
-        ), []
-
-    # Prepare document context.
-    context = "\n\n".join(
-        f"Source: {source['source']}, "
-        f"page: {source['page']}\n{source['text']}"
-        for source in sources
+    search_query = build_retrieval_query(
+        question,
+        conversation_context
     )
 
-    # Try Groq when internet is available.
+    sources = knowledge_base.search(
+        search_query
+    )
+
+    if sources:
+
+        document_context = "\n\n".join(
+
+            (
+                f"Source: {source['source']}, "
+                f"page: {source['page']}\n"
+                f"{source['text']}"
+            )
+
+            for source in sources
+
+        )
+
+    else:
+
+        document_context = (
+            "No relevant local farming documents were found. "
+            "Do not pretend that documents support your answer."
+        )
+
+    history_context = (
+        conversation_context
+        if conversation_context
+        else "No previous conversation."
+    )
+
+    # GROQ ANSWER GENERATION
+
     if client is not None:
 
         system_prompt = f"""
 You are Bol Kisan, a careful agricultural assistant.
 
-Answer in simple {language}.
+Speak in simple, natural {language}.
 
-Use ONLY the supplied farming document context.
-Do not invent facts or recommendations.
-If the documents do not answer the question, say so.
-Never invent pesticide doses, chemical combinations,
-harvest intervals, or product-specific instructions.
-For exact chemical doses, follow the actual product label.
-Keep the answer short, direct, and easy for a farmer to understand.
+Your answers are for farmers who need quick help.
+
+ANSWER STYLE:
+- Use simple everyday language.
+- Keep answers between 25 and 45 words.
+- Use 2 or 3 short sentences.
+- Give the most useful advice first.
+- Avoid unnecessary introductions.
+- Do not use tables or long lists.
+- Make the answer natural for voice playback.
+- Finish the answer completely.
+
+FARMING SAFETY:
+- Never guess a crop disease or pest diagnosis.
+- If symptoms are unclear, ask only one useful question.
+- Never invent pesticide doses or chemical combinations.
+- Never invent harvest intervals or product instructions.
+- Recommend following registered product labels.
+- Recommend local agricultural experts when needed.
+
+DOCUMENT RULES:
+- Use local documents when relevant.
+- Never claim that unsupported documents verify an answer.
+- If no relevant document exists, give cautious general advice.
+- Clearly distinguish general advice from verified local information.
+
+CONVERSATION:
+- Use conversation history to understand follow-up questions.
+- Do not treat previous assistant answers as verified facts.
+
+Do not sacrifice safety for speed.
 """
 
         try:
@@ -466,27 +658,43 @@ Keep the answer short, direct, and easy for a farmer to understand.
                     {
                         "role": "user",
                         "content": (
-                            f"Farming document context:\n{context}\n\n"
-                            f"Farmer's question: {question}"
+                            f"Previous conversation:\n"
+                            f"{history_context}\n\n"
+                            f"Farming document context:\n"
+                            f"{document_context}\n\n"
+                            f"Farmer's current question:\n"
+                            f"{question}"
                         )
                     }
                 ],
 
                 temperature=0.1,
-                max_tokens=250
+                max_tokens=120
+
             )
 
             answer = (
-                response.choices[0]
-                .message.content.strip()
-            )
+                response.choices[0].message.content or ""
+            ).strip()
 
             if answer:
 
-                save_answer(
-                    question,
-                    answer,
-                    language
+                if sources and not conversation_context:
+
+                    save_answer(
+                        question,
+                        answer,
+                        language
+                    )
+
+                elapsed = (
+                    time.perf_counter() - start_time
+                )
+
+                print(
+                    "Answer generation time:",
+                    round(elapsed, 2),
+                    "seconds"
                 )
 
                 return answer, sources
@@ -494,38 +702,84 @@ Keep the answer short, direct, and easy for a farmer to understand.
         except Exception as error:
 
             print(
-                "Groq unavailable; switching to offline mode:",
+                "Groq unavailable; using offline answer:",
                 error
             )
 
-    # Offline fallback.
-    if cached:
-        return cached, sources
+    # OFFLINE FALLBACK
 
-    return offline_answer(
+    if cached:
+        return cached, []
+
+    if not sources:
+
+        if language == "Hindi":
+
+            return (
+                "किसान भाई, अभी इस सवाल के लिए "
+                "विश्वसनीय जानकारी उपलब्ध नहीं है। "
+                "कृपया अपनी फसल और समस्या बताइए।"
+            ), []
+
+        return (
+            "I could not find reliable information for "
+            "this question. Please provide more details "
+            "about your crop and its symptoms."
+        ), []
+
+    answer, offline_sources = offline_answer(
         question,
         language,
-        knowledge_base
+        knowledge_base,
+        conversation_context
     )
 
+    elapsed = (
+        time.perf_counter() - start_time
+    )
 
-# --------------------------------------------------
-# 9. OFFLINE SPEECH-TO-TEXT
-# --------------------------------------------------
+    print(
+        "Offline answer time:",
+        round(elapsed, 2),
+        "seconds"
+    )
+
+    return answer, offline_sources
+
+
+# ==================================================
+# 11. FASTER WHISPER SPEECH RECOGNITION
+# ==================================================
 
 @lru_cache(maxsize=1)
 def get_whisper_model():
 
     os.environ["HF_HUB_OFFLINE"] = "1"
 
-    return WhisperModel(
-        "base",
+    print("Loading Whisper Tiny model...")
+
+    start_time = time.perf_counter()
+
+    model = WhisperModel(
+        "tiny",
         device="cpu",
-        compute_type="int8"
+        compute_type="int8",
+        cpu_threads=4,
+        num_workers=1
     )
+
+    print(
+        "Whisper loaded in",
+        round(time.perf_counter() - start_time, 2),
+        "seconds"
+    )
+
+    return model
 
 
 def transcribe_audio(audio_bytes, language):
+
+    start_time = time.perf_counter()
 
     language_codes = {
         "Hindi": "hi",
@@ -558,7 +812,8 @@ def transcribe_audio(audio_bytes, language):
 
             language=language_code,
 
-            beam_size=3,
+            beam_size=1,
+            best_of=1,
 
             vad_filter=False,
 
@@ -567,9 +822,11 @@ def transcribe_audio(audio_bytes, language):
             no_speech_threshold=0.6,
 
             initial_prompt=(
-                "किसान, खेती, फसल, पत्तियां, पत्ते, "
-                "पीले पत्ते, पानी, मिट्टी, खाद और मौसम।"
+                "खेती, किसान, पौधे, पौधों, पत्ते, पत्तों, "
+                "पत्तियां, पत्तियों, काले धब्बे, पीले पत्ते, "
+                "बीमारी, कीड़े, पानी, मिट्टी, खाद और फसल।"
             )
+
         )
 
         text = " ".join(
@@ -581,76 +838,130 @@ def transcribe_audio(audio_bytes, language):
         print("Detected language:", info.language)
         print("Recognized question:", text)
 
+        print(
+            "Speech recognition time:",
+            round(time.perf_counter() - start_time, 2),
+            "seconds"
+        )
+
         return text if text else None
 
     except Exception as error:
 
-        print(
-            "Offline transcription error:",
-            error
-        )
-
+        print("Offline transcription error:", error)
         return None
 
     finally:
 
         if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
-# --------------------------------------------------
-# 10. OFFLINE HINDI TEXT-TO-SPEECH
-# --------------------------------------------------
+# ==================================================
+# 12. PIPER HINDI TEXT-TO-SPEECH
+# UTF-8 FILE INPUT FIX FOR WINDOWS
+# ==================================================
 
 def text_to_speech(text, language):
 
-    # Hindi Piper voice is currently installed.
     if language != "Hindi":
+        return None
+
+    if not text or not text.strip():
         return None
 
     if not PIPER_MODEL.exists():
 
-        print("Hindi Piper model not found.")
+        print(
+            "Hindi Piper model not found:",
+            PIPER_MODEL
+        )
 
         return None
 
-    temp_path = None
+    start_time = time.perf_counter()
+
+    text_path = None
+    audio_path = None
 
     try:
+
+        # Write Hindi text using UTF-8 encoding
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".txt",
+            delete=False
+        ) as text_file:
+
+            text_file.write(text)
+            text_path = text_file.name
+
+        # Create temporary WAV destination
 
         with tempfile.NamedTemporaryFile(
             suffix=".wav",
             delete=False
-        ) as temp_file:
+        ) as audio_file:
 
-            temp_path = temp_file.name
+            audio_path = audio_file.name
 
-        # Enable UTF-8 for Hindi text on Windows.
+        # Windows UTF-8 environment
+
         piper_env = os.environ.copy()
-        piper_env["PYTHONUTF8"] = "1"
 
-        subprocess.run(
+        piper_env["PYTHONUTF8"] = "1"
+        piper_env["PYTHONIOENCODING"] = "utf-8"
+
+        # Run Piper with UTF-8 input file
+
+        result = subprocess.run(
 
             [
                 sys.executable,
                 "-m",
                 "piper",
+
                 "--model",
                 str(PIPER_MODEL),
-                "--output_file",
-                temp_path
-            ],
 
-            input=text.encode("utf-8"),
+                "--input_file",
+                text_path,
+
+                "--output_file",
+                audio_path
+            ],
 
             capture_output=True,
 
             check=True,
 
+            timeout=20,
+
             env=piper_env
+
         )
 
-        with open(temp_path, "rb") as audio_file:
+        # Verify WAV output
+
+        if not os.path.exists(audio_path):
+            raise RuntimeError(
+                "Piper did not create an audio file"
+            )
+
+        if os.path.getsize(audio_path) == 0:
+            raise RuntimeError(
+                "Piper generated an empty WAV file"
+            )
+
+        # Load generated audio into memory
+
+        with open(audio_path, "rb") as audio_file:
 
             audio = BytesIO(
                 audio_file.read()
@@ -658,7 +969,47 @@ def text_to_speech(text, language):
 
         audio.seek(0)
 
+        elapsed = (
+            time.perf_counter() - start_time
+        )
+
+        print(
+            "Speech generation time:",
+            round(elapsed, 2),
+            "seconds"
+        )
+
+        print(
+            "Generated audio size:",
+            round(len(audio.getvalue()) / 1024, 1),
+            "KB"
+        )
+
         return audio
+
+    except subprocess.TimeoutExpired:
+
+        print(
+            "Offline speech error: "
+            "Piper timed out after 20 seconds"
+        )
+
+        return None
+
+    except subprocess.CalledProcessError as error:
+
+        print("Offline speech error: Piper failed")
+
+        if error.stderr:
+
+            print(
+                error.stderr.decode(
+                    "utf-8",
+                    errors="replace"
+                )
+            )
+
+        return None
 
     except Exception as error:
 
@@ -671,13 +1022,21 @@ def text_to_speech(text, language):
 
     finally:
 
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Clean up temporary files
+
+        for path in (text_path, audio_path):
+
+            if path and os.path.exists(path):
+
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
-# --------------------------------------------------
-# 11. MOCK MANDI PRICES
-# --------------------------------------------------
+# ==================================================
+# 13. MOCK MANDI PRICES
+# ==================================================
 
 def load_mandi_prices():
 
