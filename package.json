@@ -3,15 +3,23 @@
   "version": "1.0.0",
   "main": "index.js",
   "dependencies": {
-    "expo": "~58.0.25",
+    "expo": "~58.0.26",
+    "expo-audio": "~58.0.12",
+    "expo-dev-client": "~58.0.21",
+    "expo-file-system": "~58.0.14",
+    "expo-speech": "~58.0.4",
+    "expo-speech-recognition": "^58.0.1",
     "expo-status-bar": "~58.0.5",
+    "multer": "^2.5.0",
     "react": "19.3.0",
-    "react-native": "0.88.1"
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-web": "^0.21.4"
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web"
   },
   "private": true
